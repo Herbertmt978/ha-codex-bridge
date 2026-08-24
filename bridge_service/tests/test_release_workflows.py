@@ -13,6 +13,9 @@ import re
 import tomllib
 from typing import Any, Iterator
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 import yaml
 
 
@@ -121,7 +124,7 @@ def test_setup_uv_keeps_pruning_the_actions_cache() -> None:
     assert len(setup_uv_steps) == 6
     assert all(
         step.get("with", {}).get("prune-cache") is True for step in setup_uv_steps
-    ), "setup-uv v9 must preserve the previous pruned-cache behavior explicitly"
+    ), "setup-uv v10 must preserve the previous pruned-cache behavior explicitly"
 
 
 def test_app_build_stages_reproducible_amd64_context_and_uses_official_builder() -> None:
@@ -479,6 +482,54 @@ def test_deployed_runtime_covers_the_bridge_fastapi_floor() -> None:
     assert len(pins) == 1, "the deployed App runtime must contain one FastAPI pin"
     assert tuple(map(int, pins[0])) >= tuple(map(int, floor_match.groups())), (
         "regenerate the deployed App requirements after raising the bridge floor"
+    )
+
+
+def test_deployed_runtime_satisfies_all_bridge_dependencies() -> None:
+    project = tomllib.loads(
+        (ROOT / "bridge_service" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    requirements = [
+        Requirement(requirement) for requirement in project["project"]["dependencies"]
+    ]
+    runtime = (ROOT / "codex_bridge_app" / "requirements-runtime.txt").read_text(
+        encoding="utf-8"
+    )
+    pin_matches: list[tuple[str, str]] = []
+    for line in runtime.splitlines():
+        if not line.endswith(" \\"):
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\]+)", line[:-2]
+        )
+        if match is not None:
+            pin_matches.append(match.groups())
+    pins = {
+        canonicalize_name(package): Version(version)
+        for package, version in pin_matches
+    }
+    assert len(pins) == len(pin_matches), "runtime packages must have unique pins"
+
+    missing = sorted(
+        requirement.name
+        for requirement in requirements
+        if canonicalize_name(requirement.name) not in pins
+    )
+    assert not missing, f"deployed App runtime is missing Bridge dependencies: {missing}"
+
+    incompatible = {
+        requirement.name: (
+            str(pins[canonicalize_name(requirement.name)]),
+            str(requirement.specifier),
+        )
+        for requirement in requirements
+        if not requirement.specifier.contains(
+            pins[canonicalize_name(requirement.name)], prereleases=True
+        )
+    }
+    assert not incompatible, (
+        "regenerate the deployed App requirements after changing Bridge dependencies: "
+        f"{incompatible}"
     )
 
 
