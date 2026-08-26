@@ -1,4 +1,4 @@
-FROM ghcr.io/home-assistant/base-python:3.14-alpine3.24@sha256:f5a3334bf992c36fbf2d1a0fbd7138cc5689967c1f98e3982111195be273eb76
+FROM ghcr.io/home-assistant/base-python:3.14-alpine3.24@sha256:fb41585796deece71afd5a965e9a8aa1b5c2ceb4f020389d998fbe578dbbde6a
 
 ARG TARGETARCH
 
