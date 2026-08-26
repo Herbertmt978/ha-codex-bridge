@@ -21,7 +21,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
-WORKFLOW_NAMES = ("ci", "build-app", "codex-update", "release")
+WORKFLOW_NAMES = (
+    "ci",
+    "build-app",
+    "codex-update",
+    "dependabot-automerge",
+    "release",
+)
 FULL_SHA = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 
@@ -542,21 +548,32 @@ def test_dependabot_and_codeowners_cover_ci_policy() -> None:
 
     updates = dependabot.get("updates")
     assert isinstance(updates, list) and updates
-    assert all(
-        isinstance(item, dict)
-        and item.get("multi-ecosystem-group") == "weekly-maintenance"
-        and item.get("patterns") == ["*"]
-        and "schedule" not in item
-        for item in updates
-    ), "every managed ecosystem must participate in the single maintenance group"
-
     github_actions = [
         item
         for item in updates
         if isinstance(item, dict) and item.get("package-ecosystem") == "github-actions"
     ]
-    assert github_actions, "Dependabot must keep pinned GitHub Actions current"
-    assert any(item.get("directory") == "/" for item in github_actions)
+    assert github_actions == [
+        {
+            "package-ecosystem": "github-actions",
+            "directory": "/",
+            "schedule": {"interval": "weekly"},
+            "open-pull-requests-limit": 5,
+        }
+    ], "GitHub Actions must stay standalone for one-dependency policy checks"
+
+    grouped_updates = [
+        item
+        for item in updates
+        if isinstance(item, dict) and item.get("package-ecosystem") != "github-actions"
+    ]
+    assert grouped_updates and all(
+        isinstance(item, dict)
+        and item.get("multi-ecosystem-group") == "weekly-maintenance"
+        and item.get("patterns") == ["*"]
+        and "schedule" not in item
+        for item in grouped_updates
+    ), "application ecosystems must participate in the weekly maintenance group"
 
     root_npm = next(
         item
@@ -616,3 +633,51 @@ def test_dependabot_and_codeowners_cover_ci_policy() -> None:
     assert any(
         "@herbertmt978" in token.lower() for tokens in rules for token in tokens[1:]
     )
+
+
+def test_dependabot_automerge_stays_narrow_and_never_executes_pr_code() -> None:
+    document, source = _workflow("dependabot-automerge")
+    assert document["on"] == {
+        "pull_request_target": {
+            "types": [
+                "opened",
+                "reopened",
+                "synchronize",
+                "ready_for_review",
+                "converted_to_draft",
+            ]
+        }
+    }
+
+    manage = document["jobs"]["manage"]
+    assert manage["permissions"] == {
+        "contents": "write",
+        "pull-requests": "write",
+    }
+    condition = manage["if"]
+    for required_guard in (
+        "github.repository == 'Herbertmt978/HA_Codex_Bridge'",
+        "github.event.pull_request.user.login == 'dependabot[bot]'",
+        "github.event.pull_request.base.ref == github.event.repository.default_branch",
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "dependabot/github_actions/",
+    ):
+        assert required_guard in condition
+
+    external_actions = [action for action in _walk_uses(document) if not action.startswith("./")]
+    assert external_actions == [
+        "dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98"
+    ]
+    assert "actions/checkout" not in source
+    for required_policy in (
+        '"$DEPENDENCY_GROUP"',
+        '"$MAINTAINER_CHANGES" == "true"',
+        '"$PACKAGE_ECOSYSTEM" != "github_actions"',
+        "version-update:semver-patch|version-update:semver-minor",
+        '"$NEW_VERSION" == *-*',
+        '"$dependency_count" -ne 1',
+        '"$dependency_name" != "actions/setup-node"',
+        '".github/workflows/ci.yml"',
+        "--auto --squash --match-head-commit",
+    ):
+        assert required_policy in source

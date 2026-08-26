@@ -1,0 +1,120 @@
+name: Dependabot auto-merge
+
+on:
+  # The job is restricted to same-repository Dependabot branches and never
+  # checks out or executes pull-request code.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions: {}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  manage:
+    name: Manage Dependabot auto-merge
+    if: >-
+      github.repository == 'Herbertmt978/HA_Codex_Bridge' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/github_actions/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # GitHub requires both permissions to create or clear an auto-merge
+      # request; every step remains restricted by the job-level bot checks.
+      contents: write # zizmor: ignore[excessive-permissions]
+      pull-requests: write # zizmor: ignore[excessive-permissions]
+
+    steps:
+      - name: Clear stale automatic merge request
+        if: github.event.action == 'synchronize' || github.event.action == 'converted_to_draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" == "true" ]]; then
+            gh pr merge --disable-auto "$PR_URL"
+          fi
+
+      - name: Read Dependabot metadata
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.draft == false
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Check automatic merge policy
+        if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.draft == false
+        id: policy
+        shell: bash
+        env:
+          DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          DIRECTORY: ${{ steps.metadata.outputs.directory }}
+          GH_TOKEN: ${{ github.token }}
+          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
+          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$DEPENDENCY_GROUP" || "$MAINTAINER_CHANGES" == "true" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$PACKAGE_ECOSYSTEM" != "github_actions" || "$DIRECTORY" != "/" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch|version-update:semver-minor) ;;
+            *)
+              echo "eligible=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          if [[ "$NEW_VERSION" == *-* ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          dependency_count=0
+          dependency_name=""
+          IFS=',' read -r -a dependencies <<< "$DEPENDENCY_NAMES"
+          for dependency in "${dependencies[@]}"; do
+            dependency="${dependency//[[:space:]]/}"
+            [[ -z "$dependency" ]] && continue
+            dependency_count=$((dependency_count + 1))
+            dependency_name="$dependency"
+          done
+
+          if [[ "$dependency_count" -ne 1 || "$dependency_name" != "actions/setup-node" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$(gh pr diff "$PR_URL" --name-only)" != ".github/workflows/ci.yml" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Queue eligible update for automatic merge
+        if: steps.policy.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash --match-head-commit "$PR_HEAD_SHA" "$PR_URL"

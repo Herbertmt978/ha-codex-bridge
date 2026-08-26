@@ -1,5 +1,6 @@
 version: 2
-# Routine version updates share one review and notification thread each week.
+# Routine application updates share one review and notification thread each week.
+# GitHub Actions stay separate so the guarded workflow can evaluate one action.
 # Security alerts remain governed by GitHub's separate security-update settings.
 multi-ecosystem-groups:
   weekly-maintenance:
@@ -9,9 +10,9 @@ multi-ecosystem-groups:
 updates:
   - package-ecosystem: github-actions
     directory: "/"
-    patterns:
-      - "*"
-    multi-ecosystem-group: weekly-maintenance
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
 
   - package-ecosystem: npm
     directory: "/"
