@@ -597,10 +597,17 @@ def test_dependabot_and_codeowners_cover_ci_policy() -> None:
         and item.get("package-ecosystem") == "pip"
         and item.get("directory") == "/"
     )
-    expected_pytest_ignore = [
-        {"dependency-name": "pytest", "versions": [">=9.1.0"]}
-    ]
-    assert root_pip.get("ignore") == expected_pytest_ignore
+    expected_pytest_ignore = {
+        "dependency-name": "pytest",
+        "versions": [">=9.1.0"],
+    }
+    assert root_pip.get("ignore") == [
+        {
+            "dependency-name": "pytest-homeassistant-custom-component",
+            "versions": [">=0.13.358"],
+        },
+        expected_pytest_ignore,
+    ], "the Home Assistant test fixture must remain compatible with 2026.8.3"
 
     assert not any(
         isinstance(item, dict)
@@ -616,7 +623,10 @@ def test_dependabot_and_codeowners_cover_ci_policy() -> None:
         and item.get("package-ecosystem") == "pip"
         and item.get("directory") == "/bridge_service"
     )
-    assert bridge_pip.get("ignore") == expected_pytest_ignore
+    assert bridge_pip.get("ignore") == [
+        {"dependency-name": "pydantic", "versions": [">=2.13.5"]},
+        expected_pytest_ignore,
+    ], "Pydantic must move with the pinned Home Assistant test fixture"
 
     docker_updates = [
         item
