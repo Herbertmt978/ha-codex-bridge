@@ -565,7 +565,8 @@ def test_dependabot_and_codeowners_cover_ci_policy() -> None:
     grouped_updates = [
         item
         for item in updates
-        if isinstance(item, dict) and item.get("package-ecosystem") != "github-actions"
+        if isinstance(item, dict)
+        and item.get("package-ecosystem") not in {"github-actions", "docker"}
     ]
     assert grouped_updates and all(
         isinstance(item, dict)
@@ -616,6 +617,20 @@ def test_dependabot_and_codeowners_cover_ci_policy() -> None:
         and item.get("directory") == "/bridge_service"
     )
     assert bridge_pip.get("ignore") == expected_pytest_ignore
+
+    docker_updates = [
+        item
+        for item in updates
+        if isinstance(item, dict) and item.get("package-ecosystem") == "docker"
+    ]
+    assert docker_updates == [
+        {
+            "package-ecosystem": "docker",
+            "directory": "/codex_bridge_app",
+            "schedule": {"interval": "weekly"},
+            "open-pull-requests-limit": 2,
+        }
+    ], "base-image updates must stay separate from independently mergeable updates"
 
     codeowners = ROOT / ".github" / "CODEOWNERS"
     assert codeowners.is_file()
